@@ -3,7 +3,7 @@
 import pandas
 import torch
 from tqdm import tqdm
-from datasets import load_dataset
+from datasets import load_dataset, load_metric
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 # global variables ------------------------------------------------------------
@@ -20,7 +20,7 @@ def evaluate_summaries_pegasus(dataset,
                             metric, 
                             model, 
                             tokenizer, 
-                            batch_size=16, 
+                            batch_size=4, 
                             device=device,
                             column_text="article",
                             column_summary="highlights"
@@ -28,23 +28,28 @@ def evaluate_summaries_pegasus(dataset,
     article_batches = list(chunks(dataset[column_text], batch_size))
     target_batches = list(chunks(dataset[column_summary], batch_size))
 
+    i=0
     for article_batch, target_batch in tqdm(
         zip(article_batches, target_batches),  total=len(article_batches)
         ):
-        inputs = tokenizer(article_batch, max_length=1024, truncation=True,
+        print(f"\n{i+1}th loop\n")
+        inputs = tokenizer(article_batch, max_length=128, truncation=True,
                         padding="max_length",return_tensors="pt")
+        print("recieved inputs")
         summaries = model.generate(input_ids=inputs["input_ids"].to(device),
                                 attention_mask=inputs["attention_mask"].to(device),
-                                length_penalty=0.8,num_beams=8,max_length=128)
-
+                                length_penalty=0.8,num_beams=4,max_length=64)
+        print("generated summaries")
         decoded_summaries = [tokenizer.decode(s, skip_special_tokens=True,
                                 clean_up_tokenization_spaces=True)
                             for s in summaries]
-        
+        print("decoded summaries")
         decoded_summaries = [d.replace("<n>"," ") for d in decoded_summaries]
         metric.add_batch(predictions=decoded_summaries, references=target_batch)
-    
+        print("metric prepared for computation")
+        i=i+1
     score = metric.compute()
+
     return score
 
 
@@ -58,22 +63,28 @@ print(dataset_samsum["test"][0]["dialogue"])
 print("\nSummary:")
 print(dataset_samsum["test"][0]["summary"])
 
-
+torch.cuda.empty_cache()
 model_ckpt = "google/pegasus-cnn_dailymail"
+print(f"\n\nmodel ckpt: {model_ckpt}")
 tokenizer = AutoTokenizer.from_pretrained(model_ckpt)
+print("\nTokenizer loaded")
 model = AutoModelForSeq2SeqLM.from_pretrained(model_ckpt).to(device)
-
+print("\nModel loaded")
+rouge_metric = load_metric("rouge")
+print("\nmetric loaded")
 score = evaluate_summaries_pegasus(
-            test_sampled, 
+            dataset_samsum["test"], 
             rouge_metric,
             model,
             tokenizer,
-            batch_size=8
+            column_text="dialogue",
+            column_summary="summary",
+            batch_size=4
         )
 
 rouge_names = ["rouge1", "rouge2", "rougeL", "rougeLsum"]
 rouge_dict = dict((rn, score[rn].mid.fmeasure) for rn in rouge_names)
-print(pandas.Dataframe(rouge_dict, index=["pegasus"]))
+print(pandas.DataFrame(rouge_dict, index=["pegasus"]))
    
 
 
